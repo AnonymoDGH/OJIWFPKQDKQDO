@@ -1,10 +1,10 @@
 {
-  "username": "Carlox",
-  "password": "1492",
+  "users": [ "p2bub, p3bub, p4bub, p5bub, p6bub, p8bub" ],
+  "password": "kevin12",
   "messages": [
-    "&6&l FR33 AND INSTANT KlTS --> discord.io/colonizadores", 
-    "&c&l TORO DUPE V2 --> youtube.com/watch?v=IyUAeBDVktg", 
-    "&b&l FR33 ILLEGALS KlTS  --> discord.io/colonizadores"
+    "&6&l 55! FR3E KlTS --> https://discord.gg/zVWmt7ATH5", 
+    "&c&l 555! on Top", 
+    "&b&l ILLEGALS KlTS  --> discord.gg/zVWmt7ATH5"
   ],
   "blacklist": ["qbasty", "pistonmaster"]
 }
