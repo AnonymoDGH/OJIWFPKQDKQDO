@@ -1,110 +1,171 @@
-const fs = require("fs");
-const mineflayer = require("mineflayer");
-let lobbyF = false
-let bot;
+const fs = require('fs').promises;  // Using promises version for better async handling
+const mineflayer = require('mineflayer');
+const path = require('path');
 
-console.clear()
-console.log("6b6t chat spammer by Carlox\nhttps://github.com/CarloxCoC/SpamBot\nv1.1\n")
+let lobbyF = false;
 
-const config = JSON.parse(fs.readFileSync("./config.json", "utf-8"));
-
-function getRandomMessage() {
-  return " " + config.messages[Math.floor(Math.random() * config.messages.length)];
+// Load config asynchronously
+async function loadConfig() {
+  try {
+    const configPath = path.join(__dirname, 'config.json');
+    const configData = await fs.readFile(configPath, 'utf-8');
+    return JSON.parse(configData);
+  } catch (error) {
+    console.error('Error loading config:', error);
+    process.exit(1);
+  }
 }
 
-function isInLobby() {
-  if (!bot || !bot.game || bot.game.difficulty != "hard") {
-    if (!lobbyF) leaveLobby()
+function getRandomMessage(messages) {
+  return ' ' + messages[Math.floor(Math.random() * messages.length)];
+}
+
+function isInLobby(bot) {
+  if (!bot?.game?.difficulty === 'hard') {
+    if (!lobbyF) leaveLobby(bot);
     return true;
-  } else {
-    return false;
   }
+  return false;
 }
 
-//leave the lobby
-async function leaveLobby() {
-  lobbyF = true
+async function leaveLobby(bot) {
+  if (!bot) return;
+  
+  lobbyF = true;
+  try {
+    // Move forward
+    bot.controlState.forward = true;
+    await bot.waitForTicks(40);
+    bot.controlState.forward = false;
 
-  bot.controlState.forward = true
-  await bot.waitForTicks(40)
-  bot.controlState.forward = false
-
-  while (bot?.game?.difficulty != "hard") {
-    bot.controlState.back = true
-    await bot.waitForTicks(20)
-    bot.controlState.back = false
-
-    bot.controlState.forward = true
-    await bot.waitForTicks(30)
-    bot.controlState.forward = false
-  }
-
-  lobbyF = false
-}
-
-const main = () => {
-  let forceStop = false;
-  bot = mineflayer.createBot({
-    host: "6b6t.org",
-    username: config.username,
-    version: "1.18.1",
-    skipValidation: true,
-  });
-
-  bot.once("spawn", async () => {
-    let lobbyCount = 0;
-    while (!forceStop) {
+    // Keep trying to leave lobby until difficulty is hard
+    while (bot?.game?.difficulty !== 'hard') {
+      // Move back and forth
+      bot.controlState.back = true;
       await bot.waitForTicks(20);
-      if (lobbyCount > 30) {
-        bot.end();
-        break;
-      }
-      if (!bot.entity) continue;
-      if (!bot.entity.position) continue;
-      if (isInLobby()) lobbyCount++;
-    }
-  });
+      bot.controlState.back = false;
 
-  bot.once("login", async () => {
-    await bot.waitForTicks(100);
-    bot.chat("/register " + config.password);
-    await bot.waitForTicks(100);
-    bot.chat("/login " + config.password);
-    while (!forceStop) {
-      if (!isInLobby()) {
-        for (player in bot.players) {
-          const targetUsername = bot.players[player].username;
-          if (config.blacklist.includes(targetUsername.toLowerCase()) || bot.entity.username == targetUsername) continue;
-          if (forceStop) return;
-          bot.chat("/msg " + targetUsername + getRandomMessage());
-          await bot.waitForTicks(20);
+      bot.controlState.forward = true;
+      await bot.waitForTicks(30);
+      bot.controlState.forward = false;
+    }
+  } catch (error) {
+    console.error('Error in leaveLobby:', error);
+  } finally {
+    lobbyF = false;
+  }
+}
+
+class MinecraftBot {
+  constructor(username, config) {
+    this.username = username;
+    this.config = config;
+    this.forceStop = false;
+    this.bot = null;
+  }
+
+  async initialize() {
+    this.bot = mineflayer.createBot({
+      host: 'anarchy.6b6t.org',
+      username: this.username,
+      version: '1.18.1',
+      skipValidation: true,
+    });
+
+    this.setupEventHandlers();
+  }
+
+  setupEventHandlers() {
+    this.bot.once('spawn', () => this.handleSpawn());
+    this.bot.once('login', () => this.handleLogin());
+    this.bot.on('error', this.handleError.bind(this));
+    this.bot.on('messagestr', this.handleMessage.bind(this));
+    this.bot.on('message', (message) => console.log(message.toAnsi()));
+    this.bot.on('kicked', this.handleKick.bind(this));
+    this.bot.on('end', () => this.handleEnd());
+  }
+
+  async handleSpawn() {
+    let lobbyCount = 0;
+    while (!this.forceStop) {
+      try {
+        await this.bot.waitForTicks(20);
+        if (lobbyCount > 30) {
+          this.bot.end();
+          break;
         }
+        if (!this.bot?.entity?.position) continue;
+        if (isInLobby(this.bot)) lobbyCount++;
+      } catch (error) {
+        console.error('Error in spawn handler:', error);
       }
-      await bot.waitForTicks(2);
     }
-  });
+  }
 
-  bot.on("error", (err) => {
-    console.log(err);
-    bot.end();
-  });
+  async handleLogin() {
+    try {
+      await this.bot.waitForTicks(100);
+      this.bot.chat('/register ' + this.config.password);
+      await this.bot.waitForTicks(100);
+      this.bot.chat('/login ' + this.config.password);
 
-  bot.on("messagestr", (message, pos) => {
-    if (pos != "chat" || !message.startsWith("You whisper to ")) return
-    console.log(message);
-  });
+      while (!this.forceStop) {
+        if (!isInLobby(this.bot)) {
+          for (const player in this.bot.players) {
+            const targetUsername = this.bot.players[player].username;
+            if (this.config.blacklist.includes(targetUsername.toLowerCase()) || 
+                this.bot.entity.username === targetUsername) continue;
+            
+            if (this.forceStop) return;
+            
+            this.bot.chat('/msg ' + targetUsername + getRandomMessage(this.config.messages));
+            await this.bot.waitForTicks(20);
+          }
+        }
+        await this.bot.waitForTicks(2);
+      }
+    } catch (error) {
+      console.error('Error in login handler:', error);
+    }
+  }
 
-  bot.on("kicked", (err) => {
-    console.log(err);
-    bot.end();
-  });
+  handleError(err) {
+    console.error('Bot error:', err);
+    this.bot.end();
+  }
 
-  bot.on("end", () => {
-    bot.removeAllListeners();
-    bot = null;
-    forceStop = true;
-    setTimeout(main, 5000);
-  });
-};
+  handleMessage(message, pos) {
+    if (pos === 'chat' && message.startsWith('You whisper to ')) {
+      console.log(message);
+    }
+  }
 
-main();
+  handleKick(reason) {
+    console.log('Bot kicked:', reason);
+    this.bot.end();
+  }
+
+  handleEnd() {
+    this.bot.removeAllListeners();
+    this.forceStop = true;
+    setTimeout(() => {
+      this.forceStop = false;
+      this.initialize();
+    }, 5000);
+  }
+}
+
+async function main() {
+  try {
+    const config = await loadConfig();
+    
+    // Create and initialize a bot for each user
+    const bots = config.users.map(username => new MinecraftBot(username, config));
+    await Promise.all(bots.map(bot => bot.initialize()));
+  } catch (error) {
+    console.error('Error in main:', error);
+  }
+}
+
+// Start the application
+main().catch(console.error);
