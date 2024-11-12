@@ -210,20 +210,30 @@ class BotManager {
     }
 
     async start() {
-        try {
-            const config = await this.loadConfig();
+    try {
+        const config = await this.loadConfig();
+        
+        for (const username of config.users) {
+            const bot = new MinecraftBot(username, config);
+            this.bots.set(username, bot);
             
-            for (const username of config.users) {
-                const bot = new MinecraftBot(username, config);
-                this.bots.set(username, bot);
+            // Generar un tiempo de espera aleatorio entre 5 y 30 segundos
+            const randomDelay = Math.floor(Math.random() * (30000 - 5000 + 1)) + 5000;
+            
+            console.log(`[${username}] Conectando en ${randomDelay/1000} segundos...`);
+            
+            // Programar la conexión con un retraso aleatorio
+            setTimeout(async () => {
                 await bot.connect();
-                await new Promise(resolve => setTimeout(resolve, 5000));
-            }
-        } catch (error) {
-            console.error('Error iniciando bots:', error);
+            }, randomDelay);
+            
+            // Pequeña pausa adicional para evitar sobrecargar el servidor
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
+    } catch (error) {
+        console.error('Error iniciando bots:', error);
     }
-
+}
     stop() {
         for (const bot of this.bots.values()) {
             bot.disconnect();
