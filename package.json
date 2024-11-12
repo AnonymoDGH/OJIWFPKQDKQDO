@@ -1,14 +1,12 @@
 {
-  "name": "mineflayer-spambot",
-  "version": "1.1.0",
-  "description": "Spam bot for 6b6t.org using Mineflayer",
-  "main": "app.js",
+  "name": "minecraft-bot",
+  "version": "1.0.0",
+  "description": "Minecraft Bot",
+  "main": "bot.js",
   "scripts": {
-    "test": "node app.js"
+    "start": "node --no-deprecation bot.js"
   },
-  "author": "Carlox",
-  "license": "ISC",
   "dependencies": {
-    "mineflayer": "^4.8.1"
+    "mineflayer": "^4.14.0"
   }
 }
