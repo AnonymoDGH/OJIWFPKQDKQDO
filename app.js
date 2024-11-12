@@ -1,6 +1,10 @@
+// bot.js
 const mineflayer = require('mineflayer');
-const fs = require('fs').promises;
-const path = require('path');
+const { readFile } = require('fs').promises;
+const { join } = require('path');
+
+// Suppress deprecation warnings
+process.noDeprecation = true;
 
 class MinecraftBot {
     constructor(username, config) {
@@ -8,20 +12,33 @@ class MinecraftBot {
         this.config = config;
         this.active = false;
         this.inLobby = false;
-        this.messageDelay = 20; // Ticks entre mensajes
-        this.reconnectDelay = 5000; // 5 segundos para reconexión
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 5;
     }
 
     async connect() {
-        this.bot = mineflayer.createBot({
-            host: 'anarchy.6b6t.org',
-            username: this.username,
-            version: '1.18.2',
-            auth: 'offline',
-            skipValidation: true
-        });
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            console.log(`[${this.username}] Máximo de intentos de reconexión alcanzado`);
+            return;
+        }
 
-        this.setupEventHandlers();
+        try {
+            this.bot = mineflayer.createBot({
+                host: 'anarchy.6b6t.org',
+                username: this.username,
+                version: '1.18.2',
+                auth: 'offline',
+                chatLengthLimit: 256,
+                closeTimeout: 60 * 1000, // 60 segundos timeout
+                checkTimeoutInterval: 30 * 1000 // 30 segundos check interval
+            });
+
+            this.setupEventHandlers();
+            this.reconnectAttempts++;
+        } catch (error) {
+            console.error(`[${this.username}] Error al conectar:`, error);
+            this.scheduleReconnect();
+        }
     }
 
     setupEventHandlers() {
@@ -31,41 +48,47 @@ class MinecraftBot {
         this.bot.on('error', (error) => this.onError(error));
         this.bot.on('kicked', (reason) => this.onKicked(reason));
         this.bot.on('end', () => this.onEnd());
+        
+        // Manejo de errores no capturados
+        this.bot.on('error', console.error);
+        process.on('uncaughtException', (error) => {
+            console.error('Error no capturado:', error);
+            this.disconnect();
+            this.scheduleReconnect();
+        });
     }
 
     async onSpawn() {
         this.active = true;
-        console.log(`[${this.username}] Bot spawned`);
-        this.checkLobbyLoop();
+        this.reconnectAttempts = 0; // Reset reconnect attempts on successful spawn
+        console.log(`[${this.username}] Bot conectado`);
+        await this.startBotLoop();
     }
 
     async onLogin() {
         try {
-            await this.bot.waitForTicks(50);
+            await this.sleep(2000);
             this.bot.chat(`/register ${this.config.password} ${this.config.password}`);
-            await this.bot.waitForTicks(50);
+            await this.sleep(2000);
             this.bot.chat(`/login ${this.config.password}`);
-            console.log(`[${this.username}] Logged in`);
-            this.startMessaging();
+            console.log(`[${this.username}] Autenticado`);
         } catch (error) {
             console.error(`[${this.username}] Error en login:`, error);
         }
     }
 
-    async checkLobbyLoop() {
+    async startBotLoop() {
         while (this.active) {
             try {
-                await this.bot.waitForTicks(20);
-                if (this.isInLobby()) {
-                    if (!this.inLobby) {
-                        console.log(`[${this.username}] En lobby, intentando salir...`);
-                        await this.leaveLobby();
-                    }
+                if (!this.isInLobby()) {
+                    await this.sendMessages();
                 } else {
-                    this.inLobby = false;
+                    await this.tryLeaveLobby();
                 }
+                await this.sleep(1000);
             } catch (error) {
-                console.error(`[${this.username}] Error en lobby check:`, error);
+                console.error(`[${this.username}] Error en el loop:`, error);
+                break;
             }
         }
     }
@@ -74,62 +97,48 @@ class MinecraftBot {
         return !this.bot?.game?.difficulty || this.bot.game.difficulty !== 'hard';
     }
 
-    async leaveLobby() {
-        this.inLobby = true;
-        try {
-            // Secuencia de movimientos para salir del lobby
+    async tryLeaveLobby() {
+        if (!this.inLobby) {
+            this.inLobby = true;
+            console.log(`[${this.username}] Intentando salir del lobby...`);
+            
             const movements = [
-                { direction: 'forward', ticks: 40 },
-                { direction: 'back', ticks: 20 },
-                { direction: 'forward', ticks: 30 }
+                { action: 'forward', duration: 2000 },
+                { action: 'back', duration: 1000 },
+                { action: 'forward', duration: 1500 }
             ];
 
             for (const move of movements) {
                 if (!this.active) break;
-                this.bot.controlState[move.direction] = true;
-                await this.bot.waitForTicks(move.ticks);
-                this.bot.controlState[move.direction] = false;
-                await this.bot.waitForTicks(5);
+                this.bot.setControlState(move.action, true);
+                await this.sleep(move.duration);
+                this.bot.setControlState(move.action, false);
+                await this.sleep(500);
             }
-        } catch (error) {
-            console.error(`[${this.username}] Error al salir del lobby:`, error);
+
+            this.inLobby = false;
         }
     }
 
-    async startMessaging() {
-        while (this.active) {
-            try {
-                if (!this.isInLobby()) {
-                    await this.sendMessagesToPlayers();
-                }
-                await this.bot.waitForTicks(this.messageDelay);
-            } catch (error) {
-                console.error(`[${this.username}] Error en messaging:`, error);
-                break;
-            }
-        }
-    }
+    async sendMessages() {
+        if (!this.bot?.players) return;
 
-    async sendMessagesToPlayers() {
-        const players = Object.values(this.bot.players);
-        for (const player of players) {
+        for (const [username, player] of Object.entries(this.bot.players)) {
             if (!this.active) break;
-            
-            const targetUsername = player.username;
-            if (this.shouldSkipPlayer(targetUsername)) continue;
+            if (this.shouldSkipPlayer(username)) continue;
 
-            const message = this.getRandomMessage();
             try {
-                this.bot.chat(`/msg ${targetUsername} ${message}`);
-                await this.bot.waitForTicks(10);
+                const message = this.getRandomMessage();
+                this.bot.chat(`/msg ${username} ${message}`);
+                await this.sleep(1000); // Espera entre mensajes
             } catch (error) {
-                console.error(`[${this.username}] Error enviando mensaje a ${targetUsername}:`, error);
+                console.error(`[${this.username}] Error enviando mensaje a ${username}:`, error);
             }
         }
     }
 
     shouldSkipPlayer(username) {
-        return this.config.blacklist.includes(username.toLowerCase()) ||
+        return this.config.blacklist.includes(username.toLowerCase()) || 
                username === this.username;
     }
 
@@ -143,28 +152,24 @@ class MinecraftBot {
         if (text.startsWith('You whisper to ')) {
             console.log(`[${this.username}] ${text}`);
         }
-        console.log(`[${this.username}] ${message.toAnsi()}`);
     }
 
     onError(error) {
         console.error(`[${this.username}] Error:`, error);
         this.disconnect();
+        this.scheduleReconnect();
     }
 
     onKicked(reason) {
         console.log(`[${this.username}] Kicked:`, reason);
         this.disconnect();
+        this.scheduleReconnect();
     }
 
     onEnd() {
-        console.log(`[${this.username}] Disconnected`);
+        console.log(`[${this.username}] Desconectado`);
         this.disconnect();
-        setTimeout(() => {
-            if (this.shouldReconnect) {
-                console.log(`[${this.username}] Intentando reconectar...`);
-                this.connect();
-            }
-        }, this.reconnectDelay);
+        this.scheduleReconnect();
     }
 
     disconnect() {
@@ -175,18 +180,28 @@ class MinecraftBot {
             this.bot.end();
         }
     }
+
+    scheduleReconnect() {
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+            setTimeout(() => this.connect(), delay);
+        }
+    }
+
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
 }
 
 class BotManager {
     constructor() {
         this.bots = new Map();
-        this.shouldReconnect = true;
     }
 
     async loadConfig() {
         try {
-            const configPath = path.join(__dirname, 'config.json');
-            const configData = await fs.readFile(configPath, 'utf8');
+            const configPath = join(__dirname, 'config.json');
+            const configData = await readFile(configPath, 'utf8');
             return JSON.parse(configData);
         } catch (error) {
             console.error('Error cargando config:', error);
@@ -202,7 +217,7 @@ class BotManager {
                 const bot = new MinecraftBot(username, config);
                 this.bots.set(username, bot);
                 await bot.connect();
-                await new Promise(resolve => setTimeout(resolve, 5000)); // Espera entre conexiones
+                await new Promise(resolve => setTimeout(resolve, 5000));
             }
         } catch (error) {
             console.error('Error iniciando bots:', error);
@@ -210,7 +225,6 @@ class BotManager {
     }
 
     stop() {
-        this.shouldReconnect = false;
         for (const bot of this.bots.values()) {
             bot.disconnect();
         }
@@ -218,13 +232,16 @@ class BotManager {
     }
 }
 
+// Manejo de señales de terminación
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+function shutdown() {
+    console.log('\nCerrando bots...');
+    manager.stop();
+    process.exit(0);
+}
+
 // Iniciar los bots
 const manager = new BotManager();
 manager.start().catch(console.error);
-
-// Manejar cierre del programa
-process.on('SIGINT', () => {
-    console.log('Cerrando bots...');
-    manager.stop();
-    process.exit();
-});
